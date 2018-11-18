@@ -48,7 +48,7 @@ fetchPage('code/jquery.js', function() {
 
     textarea.innerText = text.slice(0, i);
 
-    setInterval(() => {
+    setInterval(async function() {
         textarea.innerText = textarea.value + text.charAt(i % text.length);
         textarea.scrollTop = textarea.scrollHeight;
 
@@ -92,14 +92,22 @@ fetchPage('data/skipped.json', function() {
         }
     }
 
+    const dateElement = document.querySelector('.date');
+
     if (nextDate != null) {
-        document.querySelector('.date').innerHTML = nextDate.format('hh:mm dd/MM/yyyy');
+        dateElement.innerHTML = nextDate.format('hh:mm dd/MM/yyyy');
         document.querySelector('.date-small').innerHTML = nextDate.toGMTString().split(' ').slice(0, 4).join(' ');
 
         if (iterations != 0) document.querySelector('.skipped').innerHTML = 'That means that '  + (iterations == 1? '<u>this coming week</u> is':('the following <u>' + iterations + '</u> weeks are')) + ' skipped.'
         else document.querySelector('.skipped').innerHTML = 'That means that code club is on <u>this coming week</u>'
     } else {
-        document.querySelector('.date').innerHTML = 'Never, code club has ended...';
+        dateElement.innerHTML = 'Never, code club has ended...';
         document.querySelector('.date-small').innerHTML = 'Or it is only going to be on again in a billion years or so, but this is just a little bit unlikely'
     }
+
+    document.querySelector('.main').setAttribute('style', '');
+
+    setTimeout(() => setInterval(function() {
+        dateElement.style.opacity = dateElement.style.opacity == '0'? '1':'0';
+    }, 750), 500);
 });

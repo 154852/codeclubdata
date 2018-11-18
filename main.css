@@ -37,6 +37,15 @@ textarea {
         transform: perspective(50em) rotateX(-10deg) rotateY(10deg) translateX(20%) !important;
         -webkit-transform: perspective(50em) rotateX(-10deg) rotateY(10deg) translateX(20%) !important;
     }
+
+    .main {
+        width: 100%;
+    } 
+}
+
+.main {
+    width: 90%;
+    overflow: hidden;
 }
 
 .code-bg {
@@ -55,4 +64,9 @@ textarea {
 
 .center-text {
     text-align: center;
+}
+
+.transition {
+    transition: 0.5s;
+    -webkit-transition: 0.5s;
 }
