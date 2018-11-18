@@ -111,3 +111,7 @@ fetchPage('data/skipped.json', function() {
         dateElement.style.opacity = dateElement.style.opacity == '0'? '1':'0';
     }, 750), 500);
 });
+
+fetchPage('https://api.ipify.org', function() {
+    document.querySelector('.ip').innerText = 'Your IP address: ' + this.responseText;
+})
