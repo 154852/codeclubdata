@@ -44,7 +44,7 @@ function fetchPage(path, callback) {
 fetchPage('code/jquery.js', function() {
     let i = 100;
 
-    const text = this.responseText.replace(/\s*\/\/.*/g, '').replace(/\n\n/g, '\n');
+    const text = this.responseText.replace(/\s*\/\/.*/g, '').replace(/\n\s*\n/g, '\n');
 
     textarea.innerText = text.slice(0, i);
 
