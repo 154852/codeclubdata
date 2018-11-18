@@ -1,0 +1,58 @@
+body {
+    font-family: 'Share Tech Mono', monospace;
+    color: white;
+
+    background-color: rgb(2, 1, 8);
+}
+
+.full-fixed {
+    position: fixed;
+    top: 0;
+    left: 0;
+
+    width: 100%;
+    height: 100%;
+}
+
+.full {
+    width: 100%;
+    height: 100%;
+}
+
+textarea {
+    border: none;
+    outline: none;
+    background: none;
+
+    color: inherit;
+    font-family: inherit;
+    font-size: 70%;
+    
+    overflow: hidden;
+    resize: none;
+}
+
+@media only screen and (min-width: 700px) {
+    .code-bg {
+        transform: perspective(50em) rotateX(-10deg) rotateY(10deg) translateX(20%) !important;
+        -webkit-transform: perspective(50em) rotateX(-10deg) rotateY(10deg) translateX(20%) !important;
+    }
+}
+
+.code-bg {
+    transform: perspective(50em) rotateX(-10deg) rotateY(10deg);
+    -webkit-transform: perspective(50em) rotateX(-10deg) rotateY(10deg);
+    
+    opacity: 0.4;
+}
+
+.center {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+}
+
+.center-text {
+    text-align: center;
+}
