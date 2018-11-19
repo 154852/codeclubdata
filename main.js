@@ -1,4 +1,4 @@
-const textarea = document.querySelector('textarea');
+const codeElement = document.querySelector('textarea');
 
 Date.prototype.format = function(string) {
     const regex = '[CHAR]+';
@@ -46,11 +46,11 @@ fetchPage('code/jquery.js', function() {
 
     const text = this.responseText.replace(/\s*\/\/.*/g, '').replace(/\n\s*\n/g, '\n');
 
-    textarea.innerText = text.slice(0, i);
+    codeElement.innerText = text.slice(0, i);
 
     setInterval(async function() {
-        textarea.innerText = textarea.value + text.charAt(i % text.length);
-        textarea.scrollTop = textarea.scrollHeight;
+        codeElement.innerText = codeElement.value + text.charAt(i % text.length);
+        codeElement.scrollTop = codeElement.scrollHeight;
 
         i += 1;
     }, 0);

@@ -30,6 +30,11 @@ textarea {
     
     overflow: hidden;
     resize: none;
+
+    tab-size: 4;
+    /* white-space: pre-wrap; */
+    /* word-wrap: none; */
+    /* overflow-wrap: break-word */
 }
 
 @media only screen and (min-width: 700px) {
@@ -49,8 +54,8 @@ textarea {
 }
 
 .code-bg {
-    transform: perspective(50em) rotateX(-10deg) rotateY(10deg);
-    -webkit-transform: perspective(50em) rotateX(-10deg) rotateY(10deg);
+    transform: perspective(50em) rotateX(-10deg) rotateY(10deg) translateX(5%);
+    -webkit-transform: perspective(50em) rotateX(-10deg) rotateY(10deg) translateX(5%);
     
     opacity: 0.4;
 }
@@ -69,4 +74,17 @@ textarea {
 .transition {
     transition: 0.5s;
     -webkit-transition: 0.5s;
+}
+
+a {
+    cursor: pointer;
+    font-weight: 900;
+    color: inherit;
+
+    transition: 0.5s;
+    -webkit-transition: 0.5s;
+}
+
+a:hover {
+    filter: brightness(80%);
 }
