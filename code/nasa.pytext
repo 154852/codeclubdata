@@ -1,0 +1,1902 @@
+import numpy as np
+import os
+import warnings
+import imp
+
+from Input import Input
+
+
+class InputFromData(Input):
+    """
+    Used to draw random samples from a data file.
+    """
+    def __init__(self, input_filename, delimiter=" ", skip_header=0,
+                 shuffle_data=True):
+        """
+        :param input_filename: path of file containing data to be sampled.
+        :type input_filename: string
+        :param delimiter: Character used to separate data in data file.
+            Can also be an integer to specify width of each entry.
+        :type delimiter: str or int
+        :param skip_header: Number of header rows to skip in data file.
+        :type skip_header: int
+        :param shuffle_data: Whether or not to randomly shuffle data during
+                             initialization.
+        :type shuffle_data: bool
+        """
+        if not os.path.isfile(input_filename):
+            raise IOError("input_filename must refer to a file.")
+
+        self._data = np.genfromtxt(input_filename,
+                                   delimiter=delimiter,
+                                   skip_header=skip_header)
+
+        # Data should not contain NaN.
+        if np.isnan(self._data).any():
+            raise ValueError("Input data file contains invalid (NaN) entries.")
+
+        # Output should be shape (num_samples, sample_size), so reshape
+        # one dimensional data to a 2d array with one column.
+        if len(self._data .shape) == 1:
+            self._data = self._data.reshape(self._data.shape[0], -1)
+
+        # Use subset of data if we are in multiprocessor environment.
+        self.__detect_parallelization()
+
+        if shuffle_data:
+            np.random.shuffle(self._data)
+        self._index = 0
+
+    def draw_samples(self, num_samples):
+        """
+        Returns an array of samples from the previously loaded file data.
+        :param num_samples: Number of samples to be returned.
+        :type num_samples: int
+        :return: 2d ndarray of samples, each row being one sample.
+                 For one dimensional input data, this will have
+                 shape (num_samples, 1)
+        """
+
+        if not isinstance(num_samples, int):
+            raise TypeError("num_samples must be an integer.")
+
+        if num_samples <= 0:
+            raise ValueError("num_samples must be a positive integer.")
+
+        # Otherwise return the requested sample and increment the index.
+        sample = self._data[self._index: self._index + num_samples]
+        self._index += num_samples
+
+        sample_size = sample.shape[0]
+        if num_samples > sample_size:
+
+            error_message = "Only " + str(sample_size) + " of the " + \
+                            str(num_samples) + " requested samples are " + \
+                            "available.\nEither provide more sample data " + \
+                            "or increase epsilon to reduce sample size needed."
+
+            warning = UserWarning(error_message)
+            warnings.warn(warning)
+
+        return np.copy(sample)
+
+    def reset_sampling(self):
+        """
+        Used to restart sampling from beginning of data set.
+        """
+        self._index = 0
+
+    def __detect_parallelization(self):
+        """
+        If multiple cpus detected, split the data across cpus so that
+        each will have a unique subset of sample data.
+        """
+        num_cpus = 1
+        cpu_rank = 0
+
+        try:
+            imp.find_module('mpi4py')
+
+            from mpi4py import MPI
+            comm = MPI.COMM_WORLD
+
+            cpu_rank = comm.rank
+            num_cpus = comm.size
+
+        except ImportError:
+            num_cpus = 1
+            cpu_rank = 0
+
+        finally:
+            slice_size = self._data.shape[0] // num_cpus
+
+            slice_start_index = slice_size * cpu_rank
+            self._data = self._data[slice_start_index:
+                                    slice_start_index + slice_size]
+
+import numpy as np
+import imp
+
+from Input import Input
+
+
+class RandomInput(Input):
+    """
+    Used to draw samples from a specified distribution . Any distribution
+    function provided must accept a "size" parameter that determines the
+    sample size.
+    """
+    def __init__(self, distribution_function,
+                 **distribution_function_args):
+        """
+        :param distribution_function: Returns a sample of a distribution
+            with the sample sized determined by a "size" parameter. Typically,
+            a numpy function such as numpy.random.uniform() is used.
+        :type distribution_function: function
+        :param distribution_function_args: Any arguments required by the
+            distribution function, with the exception of "size", which will be
+            provided to the function when draw_samples is called.
+        """
+
+        if not callable(distribution_function):
+            raise TypeError('distribution_function must be a function.')
+
+        self._distribution = distribution_function
+        self._args = distribution_function_args
+
+        # Set random seed based on cpu rank.
+        self.__detect_parallelization()
+
+    def draw_samples(self, num_samples):
+        """
+        Returns num_samples samples from a distribution in the form of a
+        numpy array.
+        :param num_samples: Size of array to return.
+        :type num_samples: int
+        :return: A ndarray of distribution sample.
+        """
+        if not isinstance(num_samples, int):
+            raise TypeError("num_samples must be an integer.")
+
+        if num_samples <= 0:
+            raise ValueError("num_samples must be a positive integer.")
+
+        self._args['size'] = num_samples
+        sample = self._distribution(**self._args)
+
+        # Output should be shape (num_samples, sample_size), so reshape
+        # one dimensional data to a 2d array with one column.
+        samples = sample.reshape(sample.shape[0], -1)
+
+        return samples
+
+    def reset_sampling(self):
+        pass
+
+    @staticmethod
+    def __detect_parallelization():
+
+        try:
+            imp.find_module('mpi4py')
+
+            from mpi4py import MPI
+            comm = MPI.COMM_WORLD
+
+            cpu_rank = comm.rank
+
+        except ImportError:
+            cpu_rank = 0
+
+        finally:
+            np.random.seed(cpu_rank)
+
+import numpy as np
+import timeit
+from datetime import timedelta
+import sys
+import imp
+
+from MLMCPy.input import Input
+from MLMCPy.model import Model
+
+
+class MLMCSimulator:
+    """
+    Computes an estimate based on the Multi-Level Monte Carlo algorithm.
+    """
+    def __init__(self, data, models):
+        """
+        Requires a data object that provides input samples and a list of models
+        of increasing fidelity.
+        :param data: Provides a data sampling function.
+        :type data: Input
+        :param models: Each model Produces outputs from sample data input.
+        :type models: list(Model)
+        """
+        self.__check_init_parameters(data, models)
+
+        self._data = data
+        self._models = models
+        self._num_levels = len(self._models)
+
+        # Sample size to be taken at each level.
+        self._sample_sizes = np.zeros(self._num_levels, dtype=np.int)
+
+        # Used to compute sample sizes based on a fixed cost.
+        self._target_cost = None
+
+        # Sample size used in setup.
+        self._initial_sample_size = 0
+
+        # Desired level of precision.
+        self._epsilons = np.zeros(1)
+
+        # Cost of running model on a sample at each level.
+        self._costs = np.zeros(1)
+
+        # Number of elements in model output.
+        self._output_size = 1
+
+        # Enabled diagnostic text output.
+        self._verbose = False
+
+        # Detect whether we have access to multiple cpus.
+        self.__detect_parallelization()
+
+    def simulate(self, epsilon, initial_sample_size=1000, target_cost=None,
+                 verbose=False):
+        """
+        Perform MLMC simulation.
+        Computes number of samples per level before running simulations
+        to determine estimates.
+        :param epsilon: Desired accuracy to be achieved for each quantity of
+            interest.
+        :type epsilon: float, list of floats, or ndarray.
+        :param initial_sample_size: Sample size used when computing sample sizes
+            for each level in simulation.
+        :type initial_sample_size: int
+        :param target_cost: Target cost to run simulation.
+        :type target_cost: float or int
+        :param verbose: Whether to print useful diagnostic information.
+        :type verbose: bool
+        :return: Tuple of ndarrays
+            (estimates, sample count per level, variances)
+        """
+        self._verbose = verbose and self._cpu_rank == 0
+
+        self.__check_simulate_parameters(initial_sample_size, target_cost)
+        self._target_cost = target_cost
+
+        self._determine_output_size()
+
+        # If only one model was provided, run standard monte carlo.
+        if self._num_levels == 1:
+            return self._run_monte_carlo(self._models[0], epsilon)
+
+        # Compute optimal sample sizes for each level, as well as alpha value.
+        self._setup_simulation(epsilon, initial_sample_size)
+
+        # Run models and return estimate.
+        return self._run_simulation()
+
+    def _setup_simulation(self, epsilon, initial_sample_size):
+        """
+        Computes variance and cost at each level in order to estimate optimal
+        number of samples at each level.
+        :param epsilon: Epsilon values for each quantity of interest.
+        :param initial_sample_size: Sample size used when computing sample sizes
+            for each level in simulation.
+        """
+        self._initial_sample_size = initial_sample_size // self._number_cpus
+
+        if self._verbose and self._number_cpus > 1:
+
+            print("Running %s initial samples per core.") % \
+                  self._initial_sample_size
+
+        # Epsilon should be array that matches output width.
+        self._epsilons = self._process_epsilon(epsilon)
+
+        # Run models with initial sample sizes to compute costs, outputs.
+        costs, variances = self._compute_costs_and_variances()
+
+        # Compute optimal sample size at each level.
+        self._compute_optimal_sample_sizes(costs, variances)
+
+    def _run_simulation(self):
+        """
+        Compute estimate by extracting number of samples from each level
+        determined in the setup phase.
+        :return: tuple containing three ndarrays:
+            estimates: Estimates for each quantity of interest
+            sample_sizes: The sample sizes used at each level.
+            variances: Variance of model outputs at each level.
+        """
+        # Restart sampling from beginning.
+        self._data.reset_sampling()
+
+        # Time simulation. If target_cost was specified we will need this
+        # information later to approximate the target.
+        start_time = timeit.default_timer()
+        sums_of_outputs, sums_of_output_squares = self._run_simulation_loop()
+        end_time = timeit.default_timer()
+
+        # If a target cost was specified and we still have time left, add
+        # additional model runs until we hit the target cost.
+        if self._target_cost is not None:
+
+            time_remaining = self._target_cost - (end_time - start_time)
+
+            if time_remaining > np.min(self._costs):
+
+                sums_of_outputs, sums_of_output_squares = \
+                    self._run_extended_simulation_loop(sums_of_outputs,
+                                                       sums_of_output_squares,
+                                                       time_remaining)
+
+        estimates, variances = \
+            self._compute_summary_data(sums_of_outputs, sums_of_output_squares)
+
+        return estimates, self._sample_sizes, variances
+
+    def _run_simulation_loop(self):
+        """
+        Main simulation loop where sample sizes determined in setup phase are
+        drawn from the input data and run through the models. Sums of the model
+        outputs and their squares are accumulated in order to compute the
+        final estimates and variances later.
+        :return:
+        """
+        sums_of_outputs = np.zeros(self._output_size)
+        sums_of_output_squares = np.zeros(self._output_size)
+
+        # Compute sample outputs.
+        for level in range(self._num_levels):
+
+            samples = self._data.draw_samples(self._sample_sizes[level])
+            samples_taken = samples.shape[0]
+
+            # If we've run out of sample data, we should adjust the sample
+            # size values accordingly in order to avoid incorrect arithmetic
+            # later when summarizing results.
+            if samples_taken < self._sample_sizes[level]:
+                self._sample_sizes[level] = samples_taken
+
+            output = np.zeros((samples_taken, self._output_size))
+
+            for i, sample in enumerate(samples):
+                output[i] = self._evaluate_sample(i, sample, level)
+
+            sums_of_outputs += np.sum(output, axis=0)
+            sums_of_output_squares += np.sum(np.square(output), axis=0)
+
+        return sums_of_outputs, sums_of_output_squares
+
+    def _evaluate_sample(self, i, sample, level):
+        """
+        Evaluate output of an input sample, either by running the model or
+        retrieving the output from the cache.
+        :param i: sample index
+        :param sample: sample value
+        :param level: model level
+        :return: result of evaluation
+        """
+
+        if self._verbose:
+            progress = str((float(i) / self._sample_sizes[level]) * 100)[:5]
+            sys.stdout.write("\rLevel %s progress: %s%%" % (level, progress))
+
+        # If we have the output for this sample cached, use it.
+        # Otherwise, compute the output via the model.
+
+        # Absolute index of current sample.
+        sample_index = np.sum(self._sample_sizes[:level]) + i
+
+        # Level in cache that a sample with above index would be at.
+        # This must match the current level.
+        cached_level = sample_index // self._initial_sample_size
+
+        # Index within cached level for sample output.
+        cached_index = sample_index - level * self._initial_sample_size
+
+        # Level and index within cache must be correct for the
+        # appropriate cached value to be found.
+        can_use_cache = cached_index < self._initial_sample_size and \
+            cached_level == level
+
+        if self._verbose:
+            sys.stdout.write("\r                                              ")
+
+        if can_use_cache:
+            return self._cache[level][cached_index]
+        else:
+            return self._models[level].evaluate(sample)
+
+    def _run_extended_simulation_loop(self, sums, squares, time_budget):
+        """
+        Keep sampling from the most expensive model we have remaining time
+        available for based on model evaluation cost. This should only be
+        run when target_cost has been set and the simulation loop has completed
+        earlier than anticipated.
+        :param sums: output sums ndarray to add to.
+        :param squares: output square sums ndarray to add to.
+        :param time_budget: Amount of time we can fill with additional
+            model evaluations.
+        :return: tuple of updated sums and squares ndarrays.
+        """
+        target_time = timeit.default_timer() + time_budget
+        time_remaining = target_time - timeit.default_timer()
+
+        for level in range(self._num_levels-1, 0, -1):
+
+            while self._costs[level] < time_remaining:
+
+                sample = self._data.draw_samples(1)
+
+                # Ensure we haven't run out of samples.
+                if sample.size == 0:
+                    return sums, squares
+
+                self._sample_sizes[level] += 1
+
+                output = self._evaluate_sample(0, sample, level)
+
+                sums += output
+                squares += np.square(output)
+
+                time_remaining = target_time - timeit.default_timer()
+
+        return sums, squares
+
+    def _compute_summary_data(self, sums_of_outputs, sums_of_output_squares):
+        """
+        Compute means and variances of output data.
+        :param sums_of_outputs: ndarray of model output sums for each QoI.
+        :param sums_of_output_squares: ndarray of model outputs squared for
+               each QoI.
+        :return: tuple of ndarrays of estimates and variances
+        """
+        # Compute total variance for each quantity of interest.
+        total_samples = np.sum(self._sample_sizes)
+
+        means = sums_of_outputs / total_samples
+
+        normalizer = 1. / (total_samples ** 2 - total_samples)
+
+        variances = (sums_of_output_squares / total_samples -
+                     np.square(means)) * normalizer
+
+        # Compare variance for each quantity of interest to epsilon values.
+        if self._verbose:
+
+            print
+
+            epsilons_squared = np.square(self._epsilons)
+            for i, variance in enumerate(variances):
+
+                epsilon_squared = np.square(epsilons_squared[i])
+                passed = variance < epsilons_squared[i]
+
+                print 'QOI #%s: variance: %s, epsilon^2: %s, success: %s' % \
+                      (i, float(variance), float(epsilons_squared[i]), passed)
+
+        # Get mean of results across all cpus.
+        means = self._mean_over_all_cpus(means)
+        variances = self._mean_over_all_cpus(variances)
+
+        return means, variances
+
+    def _compute_costs_and_variances(self):
+        """
+        Compute costs and variances across levels.
+        :return: tuple of ndarrays:
+            1d ndarray of costs
+            2d ndarray of variances
+        """
+        if self._verbose:
+            sys.stdout.write("Determining costs: ")
+
+        # Cache model outputs computed here so that they can be reused
+        # in the simulation.
+        self._cache = np.zeros((self._num_levels,
+                                self._initial_sample_size,
+                                self._output_size))
+
+        # Process samples in model. Gather compute times for each level.
+        # Variance is computed from difference between outputs of adjacent
+        # layers evaluated from the same samples.
+        compute_times = np.zeros(self._num_levels)
+        variances = np.zeros((self._num_levels, self._output_size))
+
+        for level in range(self._num_levels):
+
+            input_samples = self._data.draw_samples(self._initial_sample_size)
+            sublevel_outputs = np.zeros((self._initial_sample_size,
+                                        self._output_size))
+
+            start_time = timeit.default_timer()
+            for i, sample in enumerate(input_samples):
+
+                self._cache[level, i] = self._models[level].evaluate(sample)
+
+                if level > 0:
+                    sublevel_outputs[i] = self._models[level-1].evaluate(sample)
+
+            compute_times[level] = timeit.default_timer() - start_time
+
+            variances[level] = np.var(self._cache[level] - sublevel_outputs,
+                                      axis=0)
+
+        costs = self._compute_costs(compute_times)
+
+        costs = self._mean_over_all_cpus(costs)
+        variances = self._mean_over_all_cpus(variances)
+
+        if self._verbose and self._cpu_rank == 0:
+            print 'Initial sample variances: \n%s' % variances
+
+        return costs, variances
+
+    def _compute_costs(self, compute_times):
+        """
+        Set costs for each level, either from precomputed values from each
+        model or based on computation times provided by compute_times.
+        :param compute_times: ndarray of computation times for computing
+        model at each layer and preceding layer.
+        """
+        costs = np.ones(self._num_levels)
+
+        # If the models have costs precomputed, use them to compute costs
+        # between each level.
+        costs_precomputed = False
+        if hasattr(self._models[0], 'cost') and \
+           self._models[0].cost is not None:
+
+            costs_precomputed = True
+            for i, model in enumerate(self._models):
+                costs[i] = model.cost
+
+            # Costs at level > 0 should be summed with previous level.
+            costs[1:] = costs[1:] + costs[:-1]
+
+        # Compute costs based on compute time differences between levels.
+        if not costs_precomputed:
+            costs = compute_times / self._initial_sample_size
+
+        # Save copy of costs for use in simulation.
+        self._costs = np.copy(costs)
+
+        if self._verbose:
+            print np.array2string(costs)
+
+        return costs
+
+    def _determine_output_size(self):
+        """
+        Runs model on a small test sample to determine shape of output.
+        """
+        self._data.reset_sampling()
+        test_sample = self._data.draw_samples(1)[0]
+        self._data.reset_sampling()
+
+        test_output = self._models[0].evaluate(test_sample)
+        self._output_size = test_output.size
+
+    def _compute_optimal_sample_sizes(self, costs, variances):
+        """
+        Compute the sample size for each level to be used in simulation.
+        :param variances: 2d ndarray of variances
+        :param costs: 1d ndarray of costs
+        """
+        if self._verbose:
+            sys.stdout.write("Computing optimal sample sizes: ")
+
+        # Need 2d version of costs in order to vectorize the operations.
+        costs = costs[:, np.newaxis]
+
+        # Compute mu.
+        sum_sqrt_vc = np.sum(np.sqrt(variances * costs), axis=0)
+
+        if self._target_cost is None:
+            mu = np.power(self._epsilons, -2) * sum_sqrt_vc
+        else:
+            mu = self._target_cost * self._number_cpus / sum_sqrt_vc
+
+        # Compute sample sizes.
+        sqrt_v_over_c = np.sqrt(variances / costs)
+        self._sample_sizes = np.amax(np.ceil(mu * sqrt_v_over_c),
+                                     axis=1)
+
+        # Divide sampling evenly across cpus.
+        self._sample_sizes /= self._number_cpus
+
+        # Set sample sizes to ints and replace any 0s with 1.
+        self._sample_sizes = self._sample_sizes.astype(int)
+        self._sample_sizes[self._sample_sizes == 0] = 1
+
+        if self._verbose:
+
+            print np.array2string(self._sample_sizes)
+
+            estimated_runtime = np.sum(self._sample_sizes * np.squeeze(costs))
+
+            self._show_time_estimate(estimated_runtime)
+
+    def _run_monte_carlo(self, model, epsilon):
+        """
+        Runs a standard monte carlo simulation. Used when only one model
+        is provided.
+        :param model: Model to evaluate.
+        :param epsilon: Desired precision, determines number of samples.
+        :return: tuple containing three ndarrays with one element each:
+            estimates: Estimates for each quantity of interest
+            sample_sizes: The sample sizes used at each level.
+            variances: Variance of model outputs at each level.
+        """
+        # Epsilon should be array that matches output width.
+        epsilons = self._process_epsilon(epsilon)
+
+        num_samples = epsilons[-1] ** -2
+        num_cpu_samples = int(max(1, num_samples // self._number_cpus))
+
+        if self._verbose:
+            print 'Only one model provided; running standard monte carlo.'
+            print 'Performing %s samples per core.' % num_cpu_samples
+
+        if self._verbose and hasattr(model, 'cost'):
+            self._show_time_estimate(int(num_cpu_samples * model.cost))
+
+        samples = self._data.draw_samples(num_cpu_samples)
+        outputs = np.zeros((num_cpu_samples, self._output_size))
+
+        for i, sample in enumerate(samples):
+            outputs[i] = model.evaluate(sample)
+
+        # Return values should have same signature as regular MLMC simulation.
+        estimates = np.mean(outputs, axis=0)
+        sample_sizes = np.array([num_samples])
+        variances = np.array([np.var(outputs)])
+
+        # If we're running on multiple CPUs, get mean of all results.
+        estimates = self._mean_over_all_cpus(estimates)
+        variances = self._mean_over_all_cpus(variances)
+
+        return estimates, sample_sizes, variances
+
+    def _process_epsilon(self, epsilon):
+        """
+        Produce an ndarray of epsilon values from scalar or vector of epsilons.
+        If a vector, length should match the number of quantities of interest.
+        :param epsilon: float, list of floats, or ndarray.
+        :return: ndarray of epsilons of size (self.num_levels).
+        """
+        if isinstance(epsilon, list):
+            epsilon = np.array(epsilon)
+
+        if isinstance(epsilon, float):
+            epsilon = np.ones(self._output_size) * epsilon
+
+        if not isinstance(epsilon, np.ndarray):
+            raise TypeError("Epsilon must be a float, list of floats, " +
+                            "or an ndarray.")
+
+        if np.any(epsilon <= 0.):
+            raise ValueError("Epsilon values must be greater than 0.")
+
+        if len(epsilon) != self._output_size:
+            raise ValueError("Number of epsilons must match number of levels.")
+
+        return epsilon
+
+    @staticmethod
+    def __check_init_parameters(data, models):
+
+        if not isinstance(data, Input):
+            TypeError("data must inherit from Input class.")
+
+        if not isinstance(models, list):
+            TypeError("models must be a list of models.")
+
+        # Reset sampling in case input data is used more than once.
+        data.reset_sampling()
+
+        # Ensure all models have the same output dimensions.
+        output_sizes = []
+        test_sample = data.draw_samples(1)[0]
+        data.reset_sampling()
+
+        for model in models:
+            if not isinstance(model, Model):
+                TypeError("models must be a list of models.")
+
+            test_output = model.evaluate(test_sample)
+            output_sizes.append(test_output.size)
+
+        output_sizes = np.array(output_sizes)
+        if not np.all(output_sizes == output_sizes[0]):
+            raise ValueError("All models must return the same output " +
+                             "dimensions.")
+
+    @staticmethod
+    def __check_simulate_parameters(starting_sample_size, maximum_cost):
+
+        if not isinstance(starting_sample_size, int):
+            raise TypeError("starting_sample_size must be an integer.")
+
+        if starting_sample_size < 1:
+            raise ValueError("starting_sample_size must be greater than zero.")
+
+        if maximum_cost is not None:
+
+            if not (isinstance(maximum_cost, float) or
+                    isinstance(maximum_cost, int)):
+
+                raise TypeError('maximum cost must be an int or float.')
+
+            if maximum_cost <= 0:
+                raise ValueError("maximum cost must be greater than zero.")
+
+    def __detect_parallelization(self):
+        """
+        Detects whether multiple processors are available and sets
+        self.number_CPUs and self.cpu_rank accordingly.
+        """
+        try:
+            imp.find_module('mpi4py')
+
+            from mpi4py import MPI
+            comm = MPI.COMM_WORLD
+
+            self._number_cpus = comm.size
+            self._cpu_rank = comm.rank
+
+        except ImportError:
+
+            self._number_cpus = 1
+            self._cpu_rank = 0
+
+    def _mean_over_all_cpus(self, values):
+        """
+        Finds the mean of ndarray of values across cpus and returns result.
+        :param values: ndarray of any shape.
+        :return: ndarray of same shape as values with mean from all cpus.
+        """
+        if self._number_cpus == 1:
+            return values
+
+        from mpi4py import MPI
+        comm = MPI.COMM_WORLD
+
+        all_values = comm.allgather(values)
+
+        return np.mean(all_values, 0)
+
+    @staticmethod
+    def _show_time_estimate(seconds):
+
+        time_delta = timedelta(seconds=seconds)
+
+        print 'Estimated simulation time: %s' % str(time_delta)
+
+import numpy as np
+import numbers
+import os
+import time
+
+from Model import Model
+
+
+class ModelFromData(Model):
+    """
+    Used to produce outputs from inputs based on data provided in text files.
+    """
+    def __init__(self, input_filename, output_filename, cost, delimiter=None,
+                 skip_header=0, wait_cost_duration=False):
+        """
+        :param input_filename: Path to file containing input data.
+        :type input_filename: string
+        :param output_filename: Path to file containing output data.
+        :type output_filename: string
+        :param cost: The average cost of computing a sample output. If multiple
+            quantities of interest are provided in the data, an ndarray of costs
+            can specify cost for each quantity of interest.
+        :type cost: float or ndarray
+        :param delimiter: Delimiter used to separate data in data files, or
+            size of each entry in the case of fixed width data.
+        :type delimiter: string, int, list(int)
+        :param wait_cost_duration: Whether to sleep for the duration of the
+            cost in order to simulate real time model evaluation.
+        :type wait_cost_duration: bool
+        """
+        self.__check_parameters(output_filename, input_filename, cost)
+
+        self._inputs = np.genfromtxt(input_filename,
+                                     delimiter=delimiter,
+                                     skip_header=skip_header)
+
+        self._outputs = np.genfromtxt(output_filename,
+                                      delimiter=delimiter,
+                                      skip_header=skip_header)
+
+        self._wait_full_cost_duration_on_evaluate = wait_cost_duration
+
+        # Data should not contain NaN.
+        if np.isnan(self._inputs).any():
+            raise ValueError("Input data file contains invalid (NaN) entries.")
+
+        if np.isnan(self._outputs).any():
+            raise ValueError("Output data file contains invalid (NaN) entries.")
+
+        self.cost = cost
+
+        if self._inputs.shape[0] != self._outputs.shape[0]:
+            raise ValueError("input and output data must have same length.")
+
+        # If multiple costs are provided, ensure the number of costs matches
+        # the number of quantities of interest.
+        if isinstance(cost, np.ndarray) and cost.size > 1:
+
+            if cost.size != self._inputs.shape[-1]:
+                raise ValueError("Size of array of costs must match number of" +
+                                 " quantities of interest in sample data.")
+
+    def evaluate(self, input_data):
+        """
+        Returns outputs corresponding to provided input_data. input_data will
+        be searched for within the stored input data and the index of the match
+        will be used to extract and return output data.
+        :param input_data: Scalar or vector to be searched for in input data.
+        :type input_data: ndarray
+        :return: A ndarray of matched output_data.
+        """
+        # input_data should be an ndarray.
+        # Automatically convert a list or numeric type into ndarray.
+        if not isinstance(input_data, np.ndarray):
+            if isinstance(input_data, list):
+                input_data = np.array(input_data)
+            elif isinstance(input_data, numbers.Number):
+                input_data = np.array([input_data])
+            else:
+                raise TypeError("input_data must be a list or ndarray.")
+
+        # input_data should not have more than one dimension.
+        if len(input_data.shape) > 1:
+            raise ValueError("input_data should be zero or one dimensional.")
+
+        # Get outputs that matched the input data.
+        matches = np.equal(input_data, self._inputs)
+
+        # If we are matching by row instead of element, we want indices
+        # of matching rows.
+        if len(matches.shape) > 1:
+            matches = matches.all(-1)
+
+        output_data = self._outputs[matches]
+
+        if len(output_data) == 0:
+            raise ValueError("Input data not found in model.")
+
+        # Check for duplication in input_data based on number of matches.
+        if np.sum(matches.astype(int)) > 1:
+            raise ValueError("Input data contains duplicate information.")
+
+        # Simulate cost if specified.
+        if self._wait_full_cost_duration_on_evaluate:
+            time.sleep(self.cost)
+
+        return np.squeeze(output_data)
+
+    @staticmethod
+    def __check_parameters(output_filename, input_filename, cost):
+
+        if not isinstance(output_filename, str):
+            raise TypeError("output_filename must be a string.")
+
+        if not os.path.isfile(output_filename):
+            raise IOError("output_file is not a valid file.")
+
+        if not isinstance(input_filename, str):
+            raise ValueError("input_filename must be a string.")
+
+        if not os.path.isfile(input_filename):
+            raise IOError("input_filename is not a valid file.")
+
+        if not (isinstance(cost, float) or isinstance(cost, np.ndarray)):
+            raise TypeError("cost must be of type float or ndarray.")
+
+import pytest
+import os
+import imp
+import numpy as np
+
+from MLMCPy.input import InputFromData
+
+# Create list of paths for each data file.
+# Used to parametrize tests.
+my_path = os.path.dirname(os.path.abspath(__file__))
+data_path = my_path + "/../testing_data"
+
+data_file_names = ["spring_mass_1D_inputs.txt", "2D_test_data.csv"]
+
+# Number of lines in each data file.
+data_file_lengths = {'spring_mass_1D_inputs.txt': 10000,
+                     '2D_test_data.csv': 5}
+
+data_file_paths = []
+for data_file in data_file_names:
+    data_file_paths.append(os.path.join(data_path, data_file))
+
+
+# Pull all scrambled sample data from a file as one ndarray.
+def get_full_data_set(file_path):
+
+    filename = os.path.basename(file_path)
+    file_length = data_file_lengths[filename]
+
+    data_sampler = InputFromData(file_path)
+    full_data_set = data_sampler.draw_samples(file_length)
+
+    return full_data_set
+
+
+@pytest.fixture
+def data_filename_2d():
+
+    return os.path.join(data_path, "2D_test_data.csv")
+
+
+@pytest.fixture
+def bad_data_file():
+
+    data_file_with_bad_data = os.path.join(data_path, "bad_data.txt")
+    return data_file_with_bad_data
+
+
+@pytest.fixture
+def mpi_info():
+    try:
+        imp.find_module('mpi4py')
+
+        from mpi4py import MPI
+        comm = MPI.COMM_WORLD
+
+        return comm.size, comm.rank
+
+    except ImportError:
+
+        return 1, 0
+
+
+def test_init_fails_on_invalid_input_file():
+
+    with pytest.raises(IOError):
+        InputFromData("not_a_real_file.txt")
+
+
+@pytest.mark.parametrize("data_filename", data_file_paths, ids=data_file_names)
+def test_init_does_not_fail_on_valid_input_file(data_filename):
+
+    InputFromData(data_filename)
+
+
+@pytest.mark.parametrize("delimiter, filename",
+                         [(",", "2D_test_data_comma_delimited.csv"),
+                          (";", "2D_test_data_semicolon_delimited.csv"),
+                          (1, "2D_test_data_length_delimited.csv")],
+                         ids=["comma", "semicolon", "length"])
+def test_can_load_alternatively_delimited_files(delimiter, filename):
+
+    file_path = os.path.join(data_path, filename)
+    sampler = InputFromData(file_path, delimiter=delimiter)
+    sample = sampler.draw_samples(5)
+
+    assert np.sum(sample) == 125.
+
+
+@pytest.mark.parametrize("data_filename", data_file_paths, ids=data_file_names)
+def test_draw_samples_returns_expected_output(data_filename):
+
+    data_sampler = InputFromData(data_filename)
+
+    for num_samples in range(1, 4):
+
+        sample = data_sampler.draw_samples(num_samples)
+        data_sampler.reset_sampling()
+
+        # Returns correct data type.
+        assert isinstance(sample, np.ndarray)
+
+        # Returns correct shape of data.
+        assert len(sample.shape) == 2
+
+        # Returns requested number of samples.
+        assert sample.shape[0] == num_samples
+
+
+@pytest.mark.parametrize("data_filename", data_file_paths, ids=data_file_names)
+def test_draw_samples_pulls_all_input_data(data_filename):
+
+    all_sampled_data = get_full_data_set(data_filename)
+
+    file_data = np.genfromtxt(data_filename)
+    file_data = file_data.reshape(file_data.shape[0], -1)
+
+    assert all_sampled_data.shape == file_data.shape
+
+
+@pytest.mark.parametrize("data_filename", data_file_paths, ids=data_file_names)
+def test_sample_data_is_scrambled(data_filename):
+
+    all_sampled_data = get_full_data_set(data_filename)
+
+    file_data = np.genfromtxt(data_filename)
+    file_data = file_data.reshape(file_data.shape[0], -1)
+
+    assert not np.array_equal(all_sampled_data, file_data)
+    assert np.isclose(np.sum(all_sampled_data), np.sum(file_data))
+
+
+@pytest.mark.parametrize("data_filename", data_file_paths, ids=data_file_names)
+def test_draw_samples_invalid_parameters_fails(data_filename):
+
+    data_sampler = InputFromData(data_filename)
+
+    with pytest.raises(TypeError):
+        data_sampler.draw_samples("five")
+
+    with pytest.raises(ValueError):
+        data_sampler.draw_samples(0)
+
+
+def test_fail_on_nan_data(bad_data_file):
+
+    with pytest.raises(ValueError):
+        InputFromData(bad_data_file)
+
+
+@pytest.mark.parametrize("rows_to_skip", [1, 2, 3])
+def test_skip_rows(data_filename_2d, rows_to_skip):
+
+    normal_input = InputFromData(data_filename_2d)
+    normal_row_count = normal_input._data.shape[0]
+
+    skipped_row_input = InputFromData(data_filename_2d,
+                                      skip_header=rows_to_skip,)
+
+    skipped_row_count = skipped_row_input._data.shape[0]
+
+    assert normal_row_count - rows_to_skip == skipped_row_count
+
+
+def test_draw_sample_warning_issued_for_insufficient_data(data_filename_2d):
+
+    small_input = InputFromData(data_filename_2d)
+
+    with pytest.warns(UserWarning):
+        small_input.draw_samples(1000)
+
+
+@pytest.mark.parametrize("data_filename", data_file_paths, ids=data_file_names)
+def test_mpi_input_sample_sliced(mpi_info, data_filename):
+
+    # This is an MPI only test, so pass if we're running in single cpu mode.
+    if mpi_info == (1, 0):
+        return
+
+    num_cpus, cpu_rank = mpi_info
+
+    # Get expected slice.
+    data_input = InputFromData(data_filename)
+    all_data = get_full_data_set(data_filename)
+
+    slice_size = all_data.shape[0] // num_cpus
+
+    slice_start_index = slice_size * cpu_rank
+    sliced_data = all_data[slice_start_index: slice_start_index + slice_size]
+
+    input_data = data_input._data
+
+    # Ensure InputFromData sliced the data in the same way.
+    assert np.array_equal(sliced_data, input_data)
+
+import pytest
+import numpy as np
+
+from MLMCPy.input import RandomInput
+
+
+@pytest.fixture
+def uniform_distribution_input():
+
+    return RandomInput(np.random.uniform)
+
+
+@pytest.fixture
+def invalid_distribution_function():
+
+    def invalid_function():
+        return [1, 2, 3]
+
+    return invalid_function
+
+
+def test_init_invalid_input():
+
+    with pytest.raises(TypeError):
+        RandomInput(1)
+
+
+def test_draw_samples_expected_output(uniform_distribution_input):
+
+    for num_samples in range(1, 10):
+
+        sample = uniform_distribution_input.draw_samples(num_samples)
+        assert isinstance(sample, np.ndarray)
+        assert sample.shape == (num_samples, 1)
+
+
+def test_exception_invalid_distribution_function(invalid_distribution_function):
+
+    with pytest.raises(TypeError):
+        invalid_sampler = RandomInput(invalid_distribution_function)
+        invalid_sampler.draw_samples(5)
+
+
+def test_extra_distribution_function_parameters():
+
+    normal_sampler = RandomInput(np.random.normal, loc=1., scale=2.0)
+    sample = normal_sampler.draw_samples(5)
+
+    assert isinstance(sample, np.ndarray)
+    assert sample.shape == (5, 1)
+
+
+@pytest.mark.parametrize('argument', [1., 0, 'a'])
+def test_draw_samples_invalid_arguments(uniform_distribution_input, argument):
+
+    with pytest.raises(Exception):
+        uniform_distribution_input.draw_samples(argument)
+
+
+def test_distribution_exception_if_size_parameter_not_accepted():
+
+    def invalid_distribution_function():
+        return np.zeros(5)
+
+    invalid_input = \
+        RandomInput(distribution_function=invalid_distribution_function)
+
+    with pytest.raises(TypeError):
+        invalid_input.draw_samples(10)
+
+import numpy as np
+from scipy.integrate import odeint
+
+from MLMCPy.model import Model
+
+
+# ------------------------------------------------------
+# Helper function to use scipy integrator in model class 
+def mass_spring(state, t, k, m):
+    """
+    Return velocity/acceleration given velocity/position and values for 
+    stiffness and mass
+    """
+
+    # unpack the state vector
+    x = state[0]
+    xd = state[1]
+
+    g = 9.8  # Meters per second
+
+    # compute acceleration xdd
+    xdd = ((-k*x)/m) + g
+
+    # return the two state derivatives
+    return [xd, xdd]
+
+# ------------------------------------------------------
+
+
+class SpringMassModel(Model):
+    """
+    Defines Spring Mass model with 1 free param (stiffness of spring, k). The
+    quantity of interest that is returned by the evaluate() function is the 
+    maximum displacement over the specified time interval
+    """
+    def __init__(self, mass=1.5, state0=None, time_step=None, cost=None):
+    
+        self._mass = mass
+        
+        # Give default initial conditions & time grid if not specified
+        if state0 is None:
+            state0 = [0.0, 0.0]
+        if time_step is None:
+            time_grid = np.arange(0.0, 10.0, 0.1)
+        else:
+            time_grid = np.arange(0.0, 10.0, time_step)
+
+        self._state0 = state0
+        self._t = time_grid
+        self.cost = cost
+
+    def simulate(self, stiffness):
+        """
+        Simulate spring mass system for given spring constant. Returns state
+        (position, velocity) at all points in time grid    
+        """
+        return odeint(mass_spring, self._state0, self._t,
+                      args=(stiffness, self._mass))
+
+    def evaluate(self, inputs):
+        """
+        Returns the max displacement over the course of the simulation.
+        MLMCPy convention is that evaluated takes in an array and returns an
+        array (even for 1D examples like this one). 
+        """
+        stiffness = inputs[0]
+        state = self.simulate(stiffness)
+        return np.array([max(state[:, 0])])
+
+import pytest
+import numpy as np
+import timeit
+import imp
+import os
+import warnings
+
+from MLMCPy.mlmc import MLMCSimulator
+from MLMCPy.model import ModelFromData
+from MLMCPy.input import RandomInput
+from MLMCPy.input import InputFromData
+
+from spring_mass import SpringMassModel
+
+# Create list of paths for each data file.
+# Used to parametrize tests.
+my_path = os.path.dirname(os.path.abspath(__file__))
+data_path = my_path + "/../testing_data"
+
+
+@pytest.fixture
+def random_input():
+
+    return RandomInput()
+
+
+@pytest.fixture
+def data_input():
+
+    return InputFromData(os.path.join(data_path, "spring_mass_1D_inputs.txt"),
+                         shuffle_data=False)
+
+
+@pytest.fixture
+def data_input_2d():
+
+    return InputFromData(os.path.join(data_path, "2D_test_data.csv"),
+                         shuffle_data=False)
+
+
+@pytest.fixture
+def beta_distribution_input():
+
+    np.random.seed(1)
+
+    def beta_distribution(shift, scale, alpha, beta, size):
+        return shift + scale * np.random.beta(alpha, beta, size)
+
+    return RandomInput(distribution_function=beta_distribution,
+                       shift=1.0, scale=2.5, alpha=3., beta=2.)
+
+
+@pytest.fixture
+def spring_models():
+
+    model_level1 = SpringMassModel(mass=1.5, time_step=1.0, cost=1.0)
+    model_level2 = SpringMassModel(mass=1.5, time_step=0.1, cost=10.0)
+    model_level3 = SpringMassModel(mass=1.5, time_step=0.01, cost=100.0)
+
+    return [model_level1, model_level2, model_level3]
+
+
+@pytest.fixture
+def models_from_data():
+
+    input_filepath = os.path.join(data_path, "spring_mass_1D_inputs.txt")
+    output1_filepath = os.path.join(data_path, "spring_mass_1D_outputs_1.0.txt")
+    output2_filepath = os.path.join(data_path, "spring_mass_1D_outputs_0.1.txt")
+    output3_filepath = os.path.join(data_path,
+                                    "spring_mass_1D_outputs_0.01.txt")
+
+    model1 = ModelFromData(input_filepath, output1_filepath, 1.)
+    model2 = ModelFromData(input_filepath, output2_filepath, 4.)
+    model3 = ModelFromData(input_filepath, output3_filepath, 16.)
+
+    return [model1, model2, model3]
+
+
+@pytest.fixture
+def models_from_2d_data():
+
+    input_filepath = os.path.join(data_path, "2D_test_data.csv")
+    output1_filepath = os.path.join(data_path, "2D_test_data_output.csv")
+    output2_filepath = os.path.join(data_path, "2D_test_data_output.csv")
+    output3_filepath = os.path.join(data_path, "2D_test_data_output.csv")
+
+    model1 = ModelFromData(input_filepath, output1_filepath, 1.)
+    model2 = ModelFromData(input_filepath, output2_filepath, 4.)
+    model3 = ModelFromData(input_filepath, output3_filepath, 16.)
+
+    return [model1, model2, model3]
+
+
+@pytest.fixture
+def filename_2d_5_column_data():
+
+    return os.path.join(data_path, "2D_test_data_long.csv")
+
+
+@pytest.fixture
+def filename_2d_3_column_data():
+
+    return os.path.join(data_path, "2D_test_data_output_3_col.csv")
+
+
+@pytest.fixture
+def mpi_info():
+    try:
+        imp.find_module('mpi4py')
+
+        from mpi4py import MPI
+        comm = MPI.COMM_WORLD
+
+        return comm.size, comm.rank
+
+    except ImportError:
+
+        return 1, 0
+
+
+def test_model_from_data(data_input, models_from_data):
+
+    sim = MLMCSimulator(models=models_from_data, data=data_input)
+    sim.simulate(1., initial_sample_size=20)
+
+
+def test_spring_model(beta_distribution_input, spring_models):
+
+    sim = MLMCSimulator(models=spring_models, data=beta_distribution_input)
+    sim.simulate(1., initial_sample_size=20)
+
+
+def test_simulate_exception_for_invalid_parameters(data_input,
+                                                   models_from_data):
+
+    test_mlmc = MLMCSimulator(models=models_from_data, data=data_input)
+
+    with pytest.raises(ValueError):
+        test_mlmc.simulate(epsilon=-.1, initial_sample_size=20)
+
+    with pytest.raises(TypeError):
+        test_mlmc.simulate(epsilon='one', initial_sample_size=20)
+
+    with pytest.raises(TypeError):
+        test_mlmc.simulate(epsilon=.1, initial_sample_size='five')
+
+    with pytest.raises(TypeError):
+        test_mlmc.simulate(epsilon=.1, initial_sample_size=5, target_cost='3')
+
+    with pytest.raises(ValueError):
+        test_mlmc.simulate(epsilon=.1, initial_sample_size=5, target_cost=-1)
+
+
+def test_simulate_expected_output_types(data_input, models_from_data):
+
+    test_mlmc = MLMCSimulator(models=models_from_data, data=data_input)
+
+    result, sample_count, variances = test_mlmc.simulate(epsilon=1.,
+                                                         initial_sample_size=20)
+
+    assert isinstance(result, np.ndarray)
+    assert isinstance(sample_count, np.ndarray)
+    assert isinstance(variances, np.ndarray)
+
+
+def test_compute_optimal_sample_sizes_expected_outputs(data_input,
+                                                       models_from_data):
+
+    # Set up simulator with values that should produce predictable results
+    # from computation of optimal sample sizes.
+    test_mlmc = MLMCSimulator(models=models_from_data[:2], data=data_input)
+
+    test_mlmc._epsilons = np.array([.1])
+
+    variances = np.array([[4.], [1.]])
+    costs = np.array([1., 4.])
+
+    test_mlmc._compute_optimal_sample_sizes(costs, variances)
+
+    # Check results.
+    sample_sizes = test_mlmc._sample_sizes
+
+    assert np.array_equal(sample_sizes, [800, 200])
+
+
+def test_optimal_sample_sizes_expected_outputs_2_qoi(data_input,
+                                                     models_from_data):
+
+    # Set up simulator with values that should produce predictable results
+    # from computation of optimal sample sizes.
+    test_mlmc = MLMCSimulator(models=models_from_data[:2], data=data_input)
+
+    test_mlmc._epsilons = np.array([.1, .01])
+
+    variances = np.array([[4., 4.], [1, 1.]])
+    costs = np.array([1., 4.])
+
+    test_mlmc._compute_optimal_sample_sizes(costs, variances)
+
+    # Check results.
+    sample_sizes = test_mlmc._sample_sizes
+
+    assert np.array_equal(sample_sizes, [80000, 20000])
+
+
+def test_compute_optimal_sample_sizes_expected_outputs_3_qoi(data_input,
+                                                             models_from_data):
+
+    # Set up simulator with values that should produce predictable results
+    # from computation of optimal sample sizes.
+    test_mlmc = MLMCSimulator(models=models_from_data[:2], data=data_input)
+
+    test_mlmc._epsilons = np.array([.1, 1., .01])
+
+    variances = np.array([[4., 4., 4.], [1, 1., 1.]])
+    costs = np.array([1., 4.])
+
+    test_mlmc._compute_optimal_sample_sizes(costs, variances)
+
+    # Check results.
+    sample_sizes = test_mlmc._sample_sizes
+
+    assert np.array_equal(sample_sizes, [80000, 20000])
+
+
+def test_calculate_initial_variances(beta_distribution_input, spring_models):
+
+    sim = MLMCSimulator(models=spring_models, data=beta_distribution_input)
+
+    np.random.seed(1)
+    sim._initial_sample_size = 100 // sim._number_cpus
+
+    costs, variances = sim._compute_costs_and_variances()
+
+    true_variances = np.array([[8.245224951411819],
+                               [0.0857219498864355],
+                               [7.916295509470576e-06]])
+
+    assert np.isclose(true_variances, variances, rtol=.05).all()
+
+
+def test_costs_and_variances_for_springmass_from_data(data_input,
+                                                      models_from_data):
+
+    sim = MLMCSimulator(models=models_from_data, data=data_input)
+    
+    sim._initial_sample_size = 100
+    costs, variances = sim._compute_costs_and_variances()
+
+    true_variances = np.array([[9.262628271266264],
+                               [0.07939834631411287],
+                               [5.437083709623372e-06]])
+
+    true_costs = np.array([1.0, 5.0, 20.0])
+
+    assert np.isclose(true_costs, costs).all()
+    assert np.isclose(true_variances, variances, rtol=.1).all()
+
+
+@pytest.mark.parametrize("num_levels", [2, 3])
+def test_calculate_estimate_for_springmass_random_input(beta_distribution_input,
+                                                        spring_models,
+                                                        num_levels):
+
+    np.random.seed(1)
+    # Result from 20,000 sample monte carlo spring mass simulation.
+    mc_20000_output_sample_mean = 12.3186216602
+
+    sim = MLMCSimulator(models=spring_models[:num_levels],
+                        data=beta_distribution_input)
+
+    estimate, sample_sizes, variances = sim.simulate(.1, 100)
+
+    assert np.isclose(estimate[0], mc_20000_output_sample_mean, rtol=.5)
+
+
+@pytest.mark.parametrize("epsilon", [1., .5, .1])
+def test_final_variances_less_than_epsilon_squared(beta_distribution_input,
+                                                   spring_models,
+                                                   epsilon):
+
+    sim = MLMCSimulator(models=spring_models, data=beta_distribution_input)
+    estimate, sample_sizes, variances = sim.simulate(epsilon, 200)
+
+    assert variances[0] < epsilon ** 2
+
+
+@pytest.mark.parametrize("cache_size", [20, 200, 2000])
+def test_output_caching(data_input, models_from_data, cache_size):
+
+    sim = MLMCSimulator(models=models_from_data, data=data_input)
+
+    # Run simulation with caching.
+    estimate1, sample_sizes, variances1 = sim.simulate(1., cache_size)
+
+    # Set initial_sample_size to 0 and run simulation again so that it will
+    # not use cached values.
+    sim._initial_sample_size = 0
+
+    # Ignore divide by zero warning cause by 0 initial_sample_size.
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+
+        estimate2, sample_sizes, variances2 = sim._run_simulation()
+
+    # Now compare final estimator and output variances.
+    # If caching is working properly, they should match.
+    assert np.array_equal(estimate1, estimate2)
+    assert np.array_equal(variances1, variances2)
+
+
+def test_input_output_with_differing_column_count(filename_2d_5_column_data,
+                                                  filename_2d_3_column_data):
+
+    model1 = ModelFromData(filename_2d_5_column_data,
+                           filename_2d_3_column_data,
+                           1.)
+
+    model2 = ModelFromData(filename_2d_5_column_data,
+                           filename_2d_3_column_data,
+                           4.)
+
+    data_input = InputFromData(filename_2d_5_column_data)
+
+    sim = MLMCSimulator(models=[model1, model2], data=data_input)
+    sim.simulate(100., 10)
+
+
+def test_fail_if_model_outputs_do_not_match_shapes(filename_2d_5_column_data,
+                                                   filename_2d_3_column_data):
+
+    model1 = ModelFromData(filename_2d_5_column_data,
+                           filename_2d_5_column_data,
+                           1.)
+
+    model2 = ModelFromData(filename_2d_5_column_data,
+                           filename_2d_3_column_data,
+                           4.)
+
+    data_input = InputFromData(filename_2d_5_column_data)
+
+    with pytest.raises(ValueError):
+        MLMCSimulator(models=[model1, model2], data=data_input)
+
+
+def test_monte_carlo_estimate_value(data_input, models_from_data):
+
+    np.random.seed(1)
+
+    # Result from 20,000 sample monte carlo spring mass simulation.
+    mc_20000_output_sample_mean = 12.3186216602
+
+    # Passing in one model into MLMCSimulator should make it run in monte
+    # carlo simulation mode.
+    models = [models_from_data[0]]
+
+    sim = MLMCSimulator(models=models, data=data_input)
+    estimate, sample_sizes, variances = sim.simulate(1., 50)
+
+    assert np.isclose(estimate, mc_20000_output_sample_mean, atol=.25)
+
+
+def test_mc_output_shapes_match_mlmc(data_input, models_from_data):
+
+    first_model = [models_from_data[0]]
+
+    mc_sim = MLMCSimulator(models=first_model, data=data_input)
+    mc_estimate, mc_sample_sizes, mc_variances = mc_sim.simulate(1., 50)
+
+    mlmc_sim = MLMCSimulator(models=models_from_data, data=data_input)
+    mlmc_estimate, mlmc_sample_sizes, mlmc_variances = mlmc_sim.simulate(1., 50)
+
+    assert mc_estimate.shape == mlmc_estimate.shape
+    assert mc_variances.shape == mlmc_variances.shape
+    assert mc_sample_sizes.shape != mlmc_sample_sizes.shape
+
+
+def test_hard_coded_test_2_level(data_input, models_from_data):
+
+    # Get simulation results.
+    np.random.seed(1)
+    models = models_from_data[:2]
+
+    sim = MLMCSimulator(models=models, data=data_input)
+    sim_estimate, sim_sample_sizes, output_variances = \
+        sim.simulate(epsilon=1., initial_sample_size=200)
+    sim_costs, sim_variances = sim._compute_costs_and_variances()
+
+    # Results from hard coded testing with same parameters.
+    hard_coded_variances = np.array([[7.931500775888307],
+                                     [0.07433907059039102]])
+
+    hard_coded_sample_sizes = np.array([10, 1])
+    hard_coded_estimate = np.array([11.131425234107827])
+
+    assert np.array_equal(sim_variances, hard_coded_variances)
+    assert np.array_equal(sim._sample_sizes, hard_coded_sample_sizes)
+    assert np.array_equal(sim_estimate, hard_coded_estimate)
+
+
+def test_hard_coded_test_3_level(data_input, models_from_data):
+
+    # Get simulation results.
+    sim = MLMCSimulator(models=models_from_data, data=data_input)
+    sim_estimate, sim_sample_sizes, output_variances = \
+        sim.simulate(epsilon=1., initial_sample_size=200)
+    sim_costs, sim_variances = sim._compute_costs_and_variances()
+
+    # Results from hard coded testing with same parameters.
+    hard_coded_variances = np.array([[7.680235831075362],
+                                     [0.07425502614473008],
+                                     [7.463599141719924e-06]])
+
+    hard_coded_sample_sizes = np.array([10, 1, 1])
+    hard_coded_estimate = np.array([11.819384316572874])
+
+    assert np.array_equal(sim_variances, hard_coded_variances)
+    assert np.array_equal(sim._sample_sizes, hard_coded_sample_sizes)
+    assert np.array_equal(sim_estimate, hard_coded_estimate)
+
+
+def test_graceful_handling_of_insufficient_samples(data_input_2d,
+                                                   models_from_2d_data):
+
+    # Test when sampling with too large initial sample size.
+    sim = MLMCSimulator(models=models_from_2d_data, data=data_input_2d)
+    sim.simulate(epsilon=1., initial_sample_size=10)
+
+    # Test when sampling with too large computed sample sizes.
+    sim = MLMCSimulator(models=models_from_2d_data, data=data_input_2d)
+    sim.simulate(epsilon=.01, initial_sample_size=10)
+
+
+def test_can_run_simulation_multiple_times_without_exception(data_input,
+                                                             models_from_data):
+
+    sim = MLMCSimulator(models=models_from_data, data=data_input)
+    sim.simulate(epsilon=1., initial_sample_size=10)
+
+    sim = MLMCSimulator(models=models_from_data, data=data_input)
+    sim.simulate(epsilon=1., initial_sample_size=10)
+    sim.simulate(epsilon=2., initial_sample_size=20)
+
+
+@pytest.mark.parametrize('target_cost', [3, 1, .5, .1])
+def test_fixed_cost(beta_distribution_input, spring_models, target_cost):
+
+    # Ensure costs are evaluated by simulator via timeit.
+    for model in spring_models:
+        delattr(model, 'cost')
+
+    sim = MLMCSimulator(models=spring_models,
+                        data=beta_distribution_input)
+
+    # Multiply sample sizes times costs and take the sum; verify that this is
+    # close to the target cost.
+    sim._initial_sample_size = 100 // sim._number_cpus
+    sim._target_cost = target_cost
+
+    costs, variances = sim._compute_costs_and_variances()
+    sim._compute_optimal_sample_sizes(costs, variances)
+    sample_sizes = sim._sample_sizes
+
+    expected_cost = np.sum(costs * sample_sizes)
+
+    assert np.isclose(expected_cost, target_cost, rtol=.05)
+
+    # Disable caching to ensure accuracy of compute time measurement.
+    sim._initial_sample_size = 0
+
+    # Ignore divide by zero warning cause by 0 initial_sample_size.
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+
+        start_time = timeit.default_timer()
+        sim._run_simulation()
+        compute_time = timeit.default_timer() - start_time
+
+    # We should be within the smallest model cost of the target cost.
+    assert np.isclose(compute_time, target_cost, rtol=.05)
+
+
+def test_mpi_random_input_unique_per_cpu(mpi_info, beta_distribution_input,
+                                         spring_models):
+
+    # This is an MPI only test, so pass if we're running in single cpu mode.
+    if mpi_info == (1, 0):
+        return
+
+    # Allow simulator to set up sampling and draw a sample.
+    sim = MLMCSimulator(models=spring_models, data=beta_distribution_input)
+    sim_data = sim._data.draw_samples(10)
+
+    # Share data across cpus and compare to ensure each cpu has unique samples.
+    from mpi4py import MPI
+    comm = MPI.COMM_WORLD
+
+    all_sim_data = comm.allgather(sim_data)
+
+    assert len(all_sim_data) == 2
+
+    for cpu_data in all_sim_data:
+        assert not np.array_equal(all_sim_data[0], cpu_data)
+
+import pytest
+import numpy as np
+import os
+import timeit
+
+from MLMCPy.model import ModelFromData
+
+# Access spring mass data:
+my_path = os.path.dirname(os.path.abspath(__file__))
+data_path = my_path + "/../testing_data"
+
+
+@pytest.fixture
+def input_data_file():
+    input_data_file = os.path.join(data_path, "spring_mass_1D_inputs.txt")
+    return input_data_file
+
+
+@pytest.fixture
+def output_data_file():
+    output_data_file = os.path.join(data_path, "spring_mass_1D_outputs_0.1.txt")
+    return output_data_file
+
+
+@pytest.fixture
+def bad_data_file():
+    data_file = os.path.join(data_path, "bad_data.txt")
+    return data_file
+
+
+@pytest.fixture
+def input_data_file_2d():
+    input_data_file = os.path.join(data_path, "2D_test_data.csv")
+    return input_data_file
+
+
+@pytest.fixture
+def output_data_file_2d():
+    output_data_file = os.path.join(data_path, "2D_test_data_output.csv")
+    return output_data_file
+
+
+@pytest.fixture
+def input_data_file_with_duplicates():
+    output_data_file = os.path.join(data_path, "2D_test_data_duplication.csv")
+    return output_data_file
+
+
+@pytest.mark.parametrize("index", [2, 4, 7, 13, 17])
+def test_evaluate_1d_data(input_data_file, output_data_file, index):
+
+    # Initialize model from spring-mass example data files:
+    data_model = ModelFromData(input_data_file, output_data_file, 1.)
+
+    input_data = np.genfromtxt(input_data_file)
+    output_data = np.genfromtxt(output_data_file)
+
+    # Model expects arrays as inputs/outputs.
+    model_output = data_model.evaluate(input_data[index])
+
+    true_output = output_data[index]
+    assert np.all(np.isclose(model_output, true_output))
+
+
+@pytest.mark.parametrize("index", [0, 2, 3])
+def test_evaluate_2d_data(input_data_file_2d, output_data_file_2d, index):
+
+    # Initialize model from spring-mass example data files:
+    data_model = ModelFromData(input_data_file_2d, output_data_file_2d, 1.)
+
+    input_data = np.genfromtxt(input_data_file_2d)
+    output_data = np.genfromtxt(output_data_file_2d)
+
+    # Model expects arrays as inputs/outputs
+    model_output = data_model.evaluate(input_data[index])
+
+    true_output = output_data[index]
+    assert np.all(np.isclose(model_output, true_output))
+
+
+@pytest.mark.parametrize("cost", [1, [1, 2], "one", np.zeros(7)])
+def test_init_fails_on_invalid_cost(input_data_file, output_data_file, cost):
+
+    with pytest.raises(Exception):
+        ModelFromData(input_data_file, output_data_file, cost)
+
+
+def test_evaluate_fails_on_invalid_input(input_data_file, output_data_file):
+
+    data_model = ModelFromData(input_data_file, output_data_file, 1.)
+
+    bogus_input = "five"
+
+    with pytest.raises(TypeError):
+        data_model.evaluate(bogus_input)
+
+    bogus_input = [[1, 2], [3, 4]]
+
+    with pytest.raises(ValueError):
+        data_model.evaluate(bogus_input)
+
+
+def test_fails_on_duplicate_input_data(input_data_file_with_duplicates,
+                                       output_data_file):
+
+    with pytest.raises(ValueError):
+
+        data_model = ModelFromData(input_data_file_with_duplicates,
+                                   output_data_file, 1.)
+        data_model.evaluate([1, 2, 3, 4, 5])
+
+
+def test_init_fails_on_incompatible_data(input_data_file, output_data_file_2d):
+
+    with pytest.raises(ValueError):
+        ModelFromData(input_data_file, output_data_file_2d, 1.)
+
+
+def test_fail_on_nan_data(bad_data_file, input_data_file, output_data_file):
+
+    with pytest.raises(ValueError):
+        ModelFromData(bad_data_file, output_data_file, 1.)
+
+    with pytest.raises(ValueError):
+        ModelFromData(input_data_file, bad_data_file, 1.)
+
+
+@pytest.mark.parametrize("rows_to_skip", [1, 2, 3])
+def test_skip_rows(input_data_file_2d, output_data_file_2d, rows_to_skip):
+
+    normal_model = ModelFromData(input_data_file_2d, output_data_file_2d, 1.)
+
+    normal_row_count = normal_model._inputs.shape[0]
+
+    skipped_row_model = ModelFromData(input_data_file_2d,
+                                      output_data_file_2d,
+                                      skip_header=rows_to_skip,
+                                      cost=1.)
+
+    skipped_row_count = skipped_row_model._inputs.shape[0]
+
+    assert normal_row_count - rows_to_skip == skipped_row_count
+
+
+@pytest.mark.parametrize("cost", [.01, .05, .1])
+def test_evaluate_with_cost_delay(cost, input_data_file, output_data_file):
+
+    model = ModelFromData(input_data_file, output_data_file, cost=cost,
+                          wait_cost_duration=True)
+
+    sample = model._inputs[0]
+
+    start_time = timeit.default_timer()
+    model.evaluate(sample)
+    evaluation_time = timeit.default_timer() - start_time
+
+    # Ensure evaluation time was close to specified cost.
+    assert np.abs(evaluation_time - cost) < .01

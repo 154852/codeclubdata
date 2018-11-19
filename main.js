@@ -48,7 +48,11 @@ if (window.location.href.split('#')[1] != 'hide') {
         'C++ (Taken from the <a href="https://github.com/ApolloAuto/apollo">Apollo</a> driverless car project)': 'apollo.cpp',
         'Java (Taken from my own game)': 'cosmoria.java',
         'Swift (Taken from the app <a href="https://github.com/Mortennn/Dozer/">Dozer</a> and some <a href="https://github.com/airbnb/">AirBNB</a> libraries)': 'dozerairbnb.swift',
-        'Object-C (Taken from a <a href="https://github.com/WhatsApp/stickers/">whatsapp</a> stickers engine)': 'whatsapp.m'
+        'Object-C (Taken from a <a href="https://github.com/WhatsApp/stickers/">whatsapp</a> stickers engine)': 'whatsapp.m',
+        'Shell (Taken from <a href="https://github.com/creationix/nvm/">NVM</a>, a <a href="https://nodejs.org/">Node</a> package manager)': 'nvm.sh',
+        'CSS (Taken from <a href="http://getbootstrap.com/">Bootstrap</a>, a CSS library that does a bit of everything)': 'bootstrap.css',
+        'Python (Taken from <a href="https://github.com/nasa/MLMCPy">MLMCPy</a>, a python library maintained by <a href="https://github.com/nasa/">NASA</a>)': 'nasa.pytext',
+        'Python (Taken from <a href="https://github.com/spotify/chartify/">Chartify</a>, a library maintained by <a href="https://github.com/spotify/">Spotify</>)': 'spotify.pytext'
     };
 
     const key = Object.keys(options)[parseInt(Math.random() * Object.keys(options).length)];
@@ -57,7 +61,7 @@ if (window.location.href.split('#')[1] != 'hide') {
     fetchPage('code/' + options[key], function() {
         let i = 100;
 
-        const text = this.responseText.replace(/\s*\/\/.*/g, '').replace(/\n\s*\n/g, '\n');
+        const text = this.responseText.replace(/\}/g, '}\n').replace(/\s*\/\/.*/g, '').replace(/\s*#.*/g, '').replace(/\n\s*\n/g, '\n');
 
         let next = text.slice(0, i);
 
@@ -67,7 +71,7 @@ if (window.location.href.split('#')[1] != 'hide') {
 
             i += 1;
 
-            next = codeElement.value + text.charAt(i % text.length);
+            next = text.slice(0, i % text.length);
         }, 0);
     });
 }
