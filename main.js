@@ -41,20 +41,34 @@ function fetchPage(path, callback) {
     xhr.send();
 }
 
-fetchPage('code/jquery.js', function() {
-    let i = 100;
+if (window.location.href.split('#')[1] != 'hide') {
+    const options = {
+        'HTML (Taken from the <a href="https://google.com">google.com</a> home page)': 'google.html',
+        'JavaScript (Taken from <a href="https://jquery.com/">jQuery</a>, a popular JS library)': 'jquery.js',
+        'C++ (Taken from the <a href="https://github.com/ApolloAuto/apollo">Apollo</a> driverless car project)': 'apollo.cpp',
+        'Java (Taken from my own game)': 'cosmoria.java',
+        'Swift (Taken from the app <a href="https://github.com/Mortennn/Dozer/">Dozer</a> and some <a href="https://github.com/airbnb/">AirBNB</a> libraries)': 'dozerairbnb.swift',
+        'Object-C (Taken from a <a href="https://github.com/WhatsApp/stickers/">whatsapp</a> stickers engine)': 'whatsapp.m'
+    };
 
-    const text = this.responseText.replace(/\s*\/\/.*/g, '').replace(/\n\s*\n/g, '\n');
+    const key = Object.keys(options)[parseInt(Math.random() * Object.keys(options).length)];
+    document.querySelector('.language').innerHTML = 'Background code: ' + key;
 
-    codeElement.innerText = text.slice(0, i);
+    fetchPage('code/' + options[key], function() {
+        let i = 100;
 
-    setInterval(async function() {
-        codeElement.innerText = codeElement.value + text.charAt(i % text.length);
-        codeElement.scrollTop = codeElement.scrollHeight;
+        const text = this.responseText.replace(/\s*\/\/.*/g, '').replace(/\n\s*\n/g, '\n');
 
-        i += 1;
-    }, 0);
-});
+        codeElement.innerText = text.slice(0, i);
+
+        setInterval(async function() {
+            codeElement.innerText = codeElement.value + text.charAt(i % text.length);
+            codeElement.scrollTop = codeElement.scrollHeight;
+
+            i += 1;
+        }, 0);
+    });
+}
 
 const leniency = 1000 * 60 * 60 * 24 * 2;
 const week = 1000 * 60 * 60 * 24 * 7;
@@ -105,7 +119,7 @@ fetchPage('data/skipped.json', function() {
         document.querySelector('.date-small').innerHTML = 'Or it is only going to be on again in a billion years or so, but this is just a little bit unlikely'
     }
 
-    document.querySelector('.main').setAttribute('style', '');
+    document.querySelector('.main').children[0].setAttribute('style', '');
 
     setTimeout(() => setInterval(function() {
         dateElement.style.opacity = dateElement.style.opacity == '0'? '1':'0';
