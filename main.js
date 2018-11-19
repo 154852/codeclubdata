@@ -59,13 +59,15 @@ if (window.location.href.split('#')[1] != 'hide') {
 
         const text = this.responseText.replace(/\s*\/\/.*/g, '').replace(/\n\s*\n/g, '\n');
 
-        codeElement.innerText = text.slice(0, i);
+        let next = text.slice(0, i);
 
         setInterval(async function() {
-            codeElement.innerText = codeElement.value + text.charAt(i % text.length);
+            codeElement.innerText = next;
             codeElement.scrollTop = codeElement.scrollHeight;
 
             i += 1;
+
+            next = codeElement.value + text.charAt(i % text.length);
         }, 0);
     });
 }
@@ -90,7 +92,6 @@ fetchPage('data/skipped.json', function() {
         let accepted = true;
 
         for (const skipped of json.skipped) {
-            // console.log(skipped - nextDate.getTime(), new Date(skipped), new Date(nextDate));
             if (Math.abs(skipped - nextDate.getTime()) < leniency) {
                 nextDate = new Date(nextDate.getTime() + week);
                 accepted = false;
