@@ -90,7 +90,8 @@ fetchPage('data/skipped.json', function() {
         let accepted = true;
 
         for (const skipped of json.skipped) {
-            if (nextDate.getTime() - skipped < leniency) {
+            // console.log(skipped - nextDate.getTime(), new Date(skipped), new Date(nextDate));
+            if (Math.abs(skipped - nextDate.getTime()) < leniency) {
                 nextDate = new Date(nextDate.getTime() + week);
                 accepted = false;
                 break;
@@ -113,7 +114,7 @@ fetchPage('data/skipped.json', function() {
         document.querySelector('.date-small').innerHTML = nextDate.toGMTString().split(' ').slice(0, 4).join(' ');
 
         if (iterations != 0) document.querySelector('.skipped').innerHTML = 'That means that '  + (iterations == 1? '<u>this coming week</u> is':('the following <u>' + iterations + '</u> weeks are')) + ' skipped.'
-        else document.querySelector('.skipped').innerHTML = 'That means that code club is on <u>this coming week</u>'
+        else document.querySelector('.skipped').innerHTML = 'That means that code club is next on <u>this coming Tuesday</u>'
     } else {
         dateElement.innerHTML = 'Never, code club has ended...';
         document.querySelector('.date-small').innerHTML = 'Or it is only going to be on again in a billion years or so, but this is just a little bit unlikely'
