@@ -41,7 +41,7 @@ function fetchPage(path, callback) {
     xhr.send();
 }
 
-let parts = window.lcoation.href.split('#')[1];
+let parts = window.location.href.split('#')[1];
 if (parts == null) parts = [];
 else parts = parts.split('+');
 
