@@ -45,7 +45,7 @@ let parts = window.location.href.split('#')[1];
 if (parts == null) parts = [];
 else parts = parts.split('+');
 
-if (parts.indexOf('invert') != -1) {
+if (parts.indexOf('invert') != -1) { //TODO: Fix
     document.body.style.filter = 'invert(1)';
 }
 
