@@ -49,7 +49,7 @@ if (parts.indexOf('invert') != -1) {
     document.body.style.filter = 'invert(1)';
 }
 
-if (parts.indexOf('hide') != -1) {
+if (parts.indexOf('hide') == -1) {
     const options = {
         'HTML (Taken from the <a href="https://google.com">google.com</a> home page)': 'google.html',
         'JavaScript (Taken from <a href="https://jquery.com/">jQuery</a>, a popular JS library)': 'jquery.js',
