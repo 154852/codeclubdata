@@ -52,7 +52,8 @@ if (window.location.href.split('#')[1] != 'hide') {
         'Shell (Taken from <a href="https://github.com/creationix/nvm/">NVM</a>, a <a href="https://nodejs.org/">Node</a> package manager)': 'nvm.sh',
         'Python (Taken from <a href="https://github.com/nasa/MLMCPy">MLMCPy</a>, a python library maintained by <a href="https://github.com/nasa/">NASA</a>)': 'nasa.pytext',
         'Python (Taken from <a href="https://github.com/spotify/chartify/">Chartify</a>, a library maintained by <a href="https://github.com/spotify/">Spotify</>)': 'spotify.pytext',
-        'Ruby (Taken from <a href="https://github.com/socketry/falcon/">Falcon</a>, a web server application)': 'falcon.rb'
+        'Ruby (Taken from <a href="https://github.com/socketry/falcon/">Falcon</a>, a web server application)': 'falcon.rb',
+        'PHP (Taken from the <a href="https://github.com/tgalopin/html-sanitizer">HTML Sanitizer</a> library)': 'html-sanitizer.php'
     };
 
     const key = Object.keys(options)[parseInt(Math.random() * Object.keys(options).length)];
