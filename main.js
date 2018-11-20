@@ -105,7 +105,7 @@ fetchPage('data/skipped.json', function() {
         let accepted = true;
 
         for (const skipped of json.skipped) {
-            if (Math.abs(skipped - nextDate.getTime()) < leniency && skipped < nextDate.getTime()) {
+            if (Math.abs(skipped - nextDate.getTime()) < leniency && skipped > nextDate.getTime()) {
                 nextDate = new Date(nextDate.getTime() + week);
                 accepted = false;
                 break;
