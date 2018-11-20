@@ -61,7 +61,7 @@ if (window.location.href.split('#')[1] != 'hide') {
     fetchPage('code/' + options[key], function() {
         let i = 100;
 
-        const text = this.responseText.replace(/\}/g, '}\n').replace(/\s*\/\/.*/g, '').replace(/\s*#.*/g, '').replace(/\n\s*\n/g, '\n');
+        const text = this.responseText.replace(/\s*\/\/.*/g, '').replace(/\s*#.*/g, '').replace(/\n\s*\n/g, '\n');
 
         let next = text.slice(0, i);
 
