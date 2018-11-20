@@ -76,7 +76,7 @@ if (window.location.href.split('#')[1] != 'hide') {
     });
 }
 
-const leniency = 1000 * 60 * 60 * 24 * 2;
+const leniency = 1000;
 const week = 1000 * 60 * 60 * 24 * 7;
 
 fetchPage('data/skipped.json', function() {
@@ -85,8 +85,9 @@ fetchPage('data/skipped.json', function() {
     for (var i = 0; i < json.skipped.length; i++) {
         const date = new Date(json.skipped[i]);
 
-        date.setHours(13);
-        date.setMinutes(45);
+        date.setHours(12);
+        date.setMinutes(55);
+        date.setMilliseconds(1000);
 
         json.skipped[i] = date.getTime();
     }
@@ -94,7 +95,7 @@ fetchPage('data/skipped.json', function() {
     const now = new Date();
 
     let nextDate = new Date(now.getTime());
-    nextDate.setDate(now.getDate() + ((7 + 2) - now.getDay()) % 7);
+    nextDate.setDate((now.getDate() + ((7 + 2) - now.getDay()) % 7) + (now.getDay() == 2 && now.getHours() > 14? 1:0));
     nextDate.setHours(12);
     nextDate.setMinutes(55);
     nextDate.setSeconds(0);
@@ -105,7 +106,7 @@ fetchPage('data/skipped.json', function() {
         let accepted = true;
 
         for (const skipped of json.skipped) {
-            if (Math.abs(skipped - nextDate.getTime()) < leniency && skipped > nextDate.getTime()) {
+            if (Math.abs(skipped - nextDate.getTime()) < leniency) {
                 nextDate = new Date(nextDate.getTime() + week);
                 accepted = false;
                 break;
@@ -128,7 +129,7 @@ fetchPage('data/skipped.json', function() {
         document.querySelector('.date-small').innerHTML = nextDate.toGMTString().split(' ').slice(0, 4).join(' ');
 
         if (iterations != 0) document.querySelector('.skipped').innerHTML = 'That means that '  + (iterations == 1? '<u>this coming week</u> is':('the following <u>' + iterations + '</u> weeks are')) + ' skipped.'
-        else document.querySelector('.skipped').innerHTML = 'That means that code club is next on <u>this coming Tuesday</u>'
+        else document.querySelector('.skipped').innerHTML = 'That means that code club is next on ' + (now.getDay() == 2?  '<u>today</u>':'<u>this coming Tuesday</u>')
     } else {
         dateElement.innerHTML = 'Never, code club has ended...';
         document.querySelector('.date-small').innerHTML = 'Or it is only going to be on again in a billion years or so, but this is just a little bit unlikely'
