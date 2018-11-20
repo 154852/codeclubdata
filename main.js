@@ -82,6 +82,15 @@ const week = 1000 * 60 * 60 * 24 * 7;
 fetchPage('data/skipped.json', function() {
     const json = JSON.parse(this.responseText);
 
+    for (var i = 0; i < json.skipped.length; i++) {
+        const date = new Date(json.skipped[i]);
+
+        date.setHours(13);
+        date.setMinutes(45);
+
+        json.skipped[i] = date.getTime();
+    }
+
     const now = new Date();
 
     let nextDate = new Date(now.getTime());
@@ -96,7 +105,7 @@ fetchPage('data/skipped.json', function() {
         let accepted = true;
 
         for (const skipped of json.skipped) {
-            if (Math.abs(skipped - nextDate.getTime()) < leniency) {
+            if (Math.abs(skipped - nextDate.getTime()) < leniency && skipped < nextDate.getTime()) {
                 nextDate = new Date(nextDate.getTime() + week);
                 accepted = false;
                 break;
