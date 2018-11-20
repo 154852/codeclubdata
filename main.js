@@ -93,6 +93,7 @@ fetchPage('data/skipped.json', function() {
     }
 
     const now = new Date();
+    const isActualDay = now.getDay() == 2 && now.getHours() < 14;
 
     let nextDate = new Date(now.getTime());
     nextDate.setDate((now.getDate() + ((7 + 2) - now.getDay()) % 7) + (now.getDay() == 2 && now.getHours() > 14? 1:0));
@@ -129,7 +130,7 @@ fetchPage('data/skipped.json', function() {
         document.querySelector('.date-small').innerHTML = nextDate.toGMTString().split(' ').slice(0, 4).join(' ');
 
         if (iterations != 0) document.querySelector('.skipped').innerHTML = 'That means that '  + (iterations == 1? '<u>this coming week</u> is':('the following <u>' + iterations + '</u> weeks are')) + ' skipped.'
-        else document.querySelector('.skipped').innerHTML = 'That means that code club is next on ' + (now.getDay() == 2?  '<u>today</u>':'<u>this coming Tuesday</u>')
+        else document.querySelector('.skipped').innerHTML = 'That means that code club is next on ' + (isActualDay?  '<u>today</u>':'<u>this coming Tuesday</u>')
     } else {
         dateElement.innerHTML = 'Never, code club has ended...';
         document.querySelector('.date-small').innerHTML = 'Or it is only going to be on again in a billion years or so, but this is just a little bit unlikely'
